@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from enum import Enum
 from sqlalchemy import Column, String, Integer, DateTime, JSON, Enum as SAEnum, ForeignKey
-from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.orm import relationship
 
 from src.models.base import Base
 
@@ -22,22 +22,17 @@ class Order(Base):
     buyer_id = Column(String(36), nullable=False, index=True)
     status = Column(SAEnum(OrderStatus), default=OrderStatus.CREATED, nullable=False)
     idempotency_key = Column(String(128), unique=True, nullable=False, index=True)
-    
     address_snapshot = Column(JSON, nullable=False)
     payment_method_snapshot = Column(JSON, nullable=False)
-    
     subtotal = Column(Integer, nullable=False)
     delivery_cost = Column(Integer, default=0)
     total = Column(Integer, nullable=False)
-    
     comment = Column(String(1000), nullable=True)
     cancel_reason = Column(String(500), nullable=True)
-    
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     paid_at = Column(DateTime, nullable=True)
     delivered_at = Column(DateTime, nullable=True)
     status_history = Column(JSON, default=list)
-    
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
 
 class OrderItem(Base):
@@ -52,5 +47,4 @@ class OrderItem(Base):
     unit_price = Column(Integer, nullable=False)
     line_total = Column(Integer, nullable=False)
     image_url = Column(String(512), nullable=True)
-    
     order = relationship("Order", back_populates="items")

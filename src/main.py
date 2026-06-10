@@ -1,8 +1,8 @@
 from fastapi import FastAPI
-from src.models.base import Base
-from src.models.order import Order, OrderItem
-from src.database import engine
 from src.api.v1.orders import router as orders_router
+from src.models.base import Base
+from src.models.order import Order, OrderItem  # <-- ВАЖНО: импортируем для create_all
+from src.database import engine
 
 Base.metadata.create_all(bind=engine)
 

@@ -15,7 +15,7 @@ def create_order(
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
     authorization: str = Header(None)
 ):
-    buyer_id = "buyer-001" # Мок из JWT
+    buyer_id = "buyer-001"
     
     try:
         result = process_checkout(db, payload, idempotency_key, buyer_id)
@@ -23,23 +23,56 @@ def create_order(
         order_items = db.query(OrderItem).filter(OrderItem.order_id == order.id).all()
         
         return OrderResponse(
-            id=order.id, number=order.number, buyer_id=order.buyer_id, status=order.status.value,
+            id=order.id,
+            number=order.number,
+            buyer_id=order.buyer_id,
+            status=order.status.value,
             status_history=[StatusHistoryItem(**h) for h in order.status_history],
-            items=[OrderItemResponse(
-                sku_id=item.sku_id, product_id=item.product_id, name=item.name, sku_code=item.sku_code,
-                quantity=item.quantity, unit_price=item.unit_price, line_total=item.line_total, image_url=item.image_url
-            ) for item in order_items],
-            subtotal=order.subtotal, delivery_cost=order.delivery_cost, total=order.total,
+            items=[
+                OrderItemResponse(
+                    sku_id=item.sku_id,
+                    product_id=item.product_id,
+                    name=item.name,
+                    sku_code=item.sku_code,
+                    quantity=item.quantity,
+                    unit_price=item.unit_price,
+                    line_total=item.line_total,
+                    image_url=item.image_url
+                )
+                for item in order_items
+            ],
+            subtotal=order.subtotal,
+            delivery_cost=order.delivery_cost,
+            total=order.total,
             address=AddressResponse(**order.address_snapshot),
             payment_method=PaymentMethodResponse(**order.payment_method_snapshot),
-            comment=order.comment, cancel_reason=order.cancel_reason,
-            created_at=order.created_at, paid_at=order.paid_at, delivered_at=order.delivered_at
+            comment=order.comment,
+            cancel_reason=order.cancel_reason,
+            created_at=order.created_at,
+            paid_at=order.paid_at,
+            delivered_at=order.delivered_at
         )
     except B2BUnavailableError:
-        raise HTTPException(status_code=503, detail={"code": "B2B_UNAVAILABLE", "message": "B2B service unavailable"})
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "SERVICE_UNAVAILABLE", "message": "B2B service unavailable"}
+        )
     except ReserveFailedError as e:
-        raise HTTPException(status_code=409, detail={"code": "RESERVE_FAILED", "message": "Reserve failed", "failed_items": e.failed_items})
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "RESERVE_FAILED",
+                "message": "One or more items could not be reserved",
+                "failed_items": e.failed_items
+            }
+        )
     except CartValidationError as e:
-        raise HTTPException(status_code=422, detail={"code": "CART_INVALID", "message": str(e)})
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "CART_INVALID", "message": str(e)}
+        )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail={"code": "VALIDATION_ERROR", "message": str(e)})
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "VALIDATION_ERROR", "message": str(e)}
+        )
