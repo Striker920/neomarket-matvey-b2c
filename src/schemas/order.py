@@ -2,10 +2,6 @@ from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import datetime
 
-class OrderItemRequest(BaseModel):
-    sku_id: str
-    quantity: int = Field(..., gt=0)
-
 class OrderItemSnapshot(BaseModel):
     sku_id: str
     quantity: int = Field(..., gt=0)
@@ -15,8 +11,7 @@ class OrderCreateRequest(BaseModel):
     address_id: str = Field(..., description="ID адреса доставки")
     payment_method_id: str = Field(..., description="ID платёжного метода")
     comment: Optional[str] = Field(None, max_length=1000)
-    items: List[OrderItemRequest] = Field(..., description="Список товаров для заказа")
-    items_snapshot: Optional[List[OrderItemSnapshot]] = Field(None, description="Опциональный снапшот для валидации")
+    items_snapshot: Optional[List[OrderItemSnapshot]] = Field(None, description="Опциональный снапшот для валидации расхождений")
 
 class OrderItemResponse(BaseModel):
     sku_id: str
