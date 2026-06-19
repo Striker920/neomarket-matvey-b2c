@@ -8,15 +8,24 @@ from src.models.order import OrderItem
 
 router = APIRouter(prefix="/api/v1", tags=["B2C: Orders"])
 
+def get_current_buyer(authorization: str = Header(..., alias="Authorization")) -> str:
+    """
+    Извлечение buyer_id из JWT-токена.
+    В реальной системе здесь парсинг JWT. Для тестов возвращаем мок.
+    """
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED", "message": "Требуется Bearer токен"})
+    # В production: декодирование JWT и извлечение sub (buyer_id)
+    # Для тестов: мок buyer_id
+    return "buyer-001"
+
 @router.post("/orders", status_code=status.HTTP_201_CREATED)
 def create_order(
     payload: OrderCreateRequest,
     db: Session = Depends(get_db),
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
-    authorization: str = Header(None)
+    buyer_id: str = Depends(get_current_buyer)
 ):
-    buyer_id = "buyer-001"
-    
     try:
         result = process_checkout(db, payload, idempotency_key, buyer_id)
         order = result["order"]
@@ -55,7 +64,7 @@ def create_order(
     except B2BUnavailableError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "SERVICE_UNAVAILABLE", "message": "B2B service unavailable"}
+            detail={"code": "SERVICE_UNAVAILABLE", "message": "B2B or Cart service unavailable"}
         )
     except ReserveFailedError as e:
         raise HTTPException(

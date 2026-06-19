@@ -28,18 +28,17 @@ def setup_db():
 
 HEADERS = {"Idempotency-Key": "checkout-001", "Authorization": "Bearer mock-token"}
 
-@patch("src.services.checkout_service._fetch_sku_details_from_b2b")
-@patch("src.services.checkout_service._get_buyer_cart")
-def test_checkout_creates_paid_order_with_fixed_prices(mock_get_cart, mock_fetch_sku):
+@patch("src.services.checkout_service.b2b_client.get_sku_details_batch")
+@patch("src.services.checkout_service.cart_client.get_cart")
+def test_checkout_creates_paid_order_with_fixed_prices(mock_get_cart, mock_get_sku):
     mock_get_cart.return_value = [{"sku_id": "sku-001", "quantity": 2}]
-    mock_fetch_sku.return_value = {
+    mock_get_sku.return_value = {
         "sku-001": {"unit_price": 299900, "product_id": "prod-001", "product_title": "Test Product", "sku_name": "Black, L", "sku_code": "TST-BLK-L", "image_url": "https://example.com/img.jpg"}
     }
     
-    with patch("src.services.b2b_client.B2BClient.reserve_inventory") as mock_reserve:
+    with patch("src.services.checkout_service.b2b_client.reserve_inventory") as mock_reserve:
         mock_reserve.return_value = {"order_id": "test-id", "status": "RESERVED", "reserved_at": "2023-10-01T12:00:00Z"}
         
-        # ВНИМАНИЕ: поля items больше нет в запросе!
         payload = {
             "address_id": "addr-001", 
             "payment_method_id": "pm-001", 
@@ -52,20 +51,21 @@ def test_checkout_creates_paid_order_with_fixed_prices(mock_get_cart, mock_fetch
         assert data["status"] == "PAID"
         assert data["total"] == 599800
         assert data["items"][0]["unit_price"] == 299900
+        assert data["items"][0]["name"] == "Test Product - Black, L"
 
-@patch("src.services.checkout_service._fetch_sku_details_from_b2b")
-@patch("src.services.checkout_service._get_buyer_cart")
-def test_partial_reserve_failure_returns_409(mock_get_cart, mock_fetch_sku):
+@patch("src.services.checkout_service.b2b_client.get_sku_details_batch")
+@patch("src.services.checkout_service.cart_client.get_cart")
+def test_partial_reserve_failure_returns_409(mock_get_cart, mock_get_sku):
     mock_get_cart.return_value = [
         {"sku_id": "sku-001", "quantity": 1},
         {"sku_id": "sku-002", "quantity": 1}
     ]
-    mock_fetch_sku.return_value = {
+    mock_get_sku.return_value = {
         "sku-001": {"unit_price": 1000, "product_id": "p1", "product_title": "P1", "sku_name": "N1"},
         "sku-002": {"unit_price": 2000, "product_id": "p2", "product_title": "P2", "sku_name": "N2"}
     }
     
-    with patch("src.services.b2b_client.B2BClient.reserve_inventory") as mock_reserve:
+    with patch("src.services.checkout_service.b2b_client.reserve_inventory") as mock_reserve:
         mock_reserve.side_effect = ReserveFailedError([{"sku_id": "sku-002", "reason": "out_of_stock"}])
         
         payload = {"address_id": "addr-001", "payment_method_id": "pm-001"}
@@ -75,15 +75,15 @@ def test_partial_reserve_failure_returns_409(mock_get_cart, mock_fetch_sku):
         assert response.status_code == 409
         assert response.json()["detail"]["code"] == "RESERVE_FAILED"
 
-@patch("src.services.checkout_service._fetch_sku_details_from_b2b")
-@patch("src.services.checkout_service._get_buyer_cart")
-def test_idempotency_returns_existing_order(mock_get_cart, mock_fetch_sku):
+@patch("src.services.checkout_service.b2b_client.get_sku_details_batch")
+@patch("src.services.checkout_service.cart_client.get_cart")
+def test_idempotency_returns_existing_order(mock_get_cart, mock_get_sku):
     mock_get_cart.return_value = [{"sku_id": "sku-003", "quantity": 1}]
-    mock_fetch_sku.return_value = {
+    mock_get_sku.return_value = {
         "sku-003": {"unit_price": 150000, "product_id": "prod-003", "product_title": "Idem", "sku_name": "Red"}
     }
     
-    with patch("src.services.b2b_client.B2BClient.reserve_inventory") as mock_reserve:
+    with patch("src.services.checkout_service.b2b_client.reserve_inventory") as mock_reserve:
         mock_reserve.return_value = {"order_id": "test-id", "status": "RESERVED", "reserved_at": "2023-10-01T12:00:00Z"}
         
         payload = {"address_id": "addr-001", "payment_method_id": "pm-001"}
@@ -98,15 +98,15 @@ def test_idempotency_returns_existing_order(mock_get_cart, mock_fetch_sku):
         assert resp2.json()["id"] == order_id_1
         assert mock_reserve.call_count == 1
 
-@patch("src.services.checkout_service._fetch_sku_details_from_b2b")
-@patch("src.services.checkout_service._get_buyer_cart")
-def test_b2b_unavailable_returns_503(mock_get_cart, mock_fetch_sku):
+@patch("src.services.checkout_service.b2b_client.get_sku_details_batch")
+@patch("src.services.checkout_service.cart_client.get_cart")
+def test_b2b_unavailable_returns_503(mock_get_cart, mock_get_sku):
     mock_get_cart.return_value = [{"sku_id": "sku-001", "quantity": 1}]
-    mock_fetch_sku.return_value = {
+    mock_get_sku.return_value = {
         "sku-001": {"unit_price": 1000, "product_id": "p1", "product_title": "P1", "sku_name": "N1"}
     }
     
-    with patch("src.services.b2b_client.B2BClient.reserve_inventory") as mock_reserve:
+    with patch("src.services.checkout_service.b2b_client.reserve_inventory") as mock_reserve:
         mock_reserve.side_effect = B2BUnavailableError("Service down")
         
         payload = {"address_id": "addr-001", "payment_method_id": "pm-001"}

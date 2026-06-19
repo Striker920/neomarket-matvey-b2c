@@ -1,5 +1,4 @@
 import uuid
-import httpx
 from datetime import datetime
 from typing import List, Dict, Any
 from sqlalchemy.orm import Session
@@ -7,58 +6,44 @@ from sqlalchemy.exc import IntegrityError
 from src.models.order import Order, OrderItem, OrderStatus
 from src.schemas.order import OrderCreateRequest
 from src.services.b2b_client import b2b_client, B2BUnavailableError, ReserveFailedError
-from src.core.config import settings
+from src.services.cart_client import cart_client, CartUnavailableError
 
 class CartValidationError(Exception): pass
 
-def _get_buyer_cart(buyer_id: str) -> List[Dict[str, Any]]:
-    """
-    Чтение корзины покупателя server-side.
-    В реальной реализации здесь будет HTTP-запрос к Cart Service или чтение из БД.
-    """
-    # Реальная реализация:
-    # response = httpx.get(f"{settings.CART_SERVICE_URL}/api/v1/carts/{buyer_id}")
-    # return response.json()["items"]
-    
-    # Заглушка, которая переопределяется (mock) в unit-тестах
-    return []
-
-def _fetch_sku_details_from_b2b(sku_ids: List[str]) -> Dict[str, dict]:
-    """Получение актуальных цен и деталей SKU через HTTP GET к B2B сервису"""
-    # Реальная реализация HTTP-запроса к B2B
-    response = httpx.get(
-        f"{settings.B2B_SERVICE_URL}/api/v1/products",
-        params={"ids": ",".join(sku_ids)},
-        headers={"X-Service-Key": settings.INTERNAL_SERVICE_KEY},
-        timeout=5.0
-    )
-    response.raise_for_status()
-    # Ожидаемый формат ответа B2B: {"items": [{"sku_id": "...", "unit_price": 100, ...}]}
-    data = response.json()
-    return {item["sku_id"]: item for item in data.get("items", [])}
-
 def process_checkout(db: Session, payload: OrderCreateRequest, idempotency_key: str, buyer_id: str) -> dict:
+    # 1. Проверка идемпотентности
     existing_order = db.query(Order).filter(Order.idempotency_key == idempotency_key).first()
     if existing_order:
         return {"status": "idempotent", "order": existing_order}
 
-    # 1. Читаем корзину server-side
-    cart_items = _get_buyer_cart(buyer_id)
+    # 2. Генерация order_id ЗАРАНЕЕ (передаётся в B2B reserve)
+    order_id = str(uuid.uuid4())
+
+    # 3. Чтение корзины server-side через HTTP-вызов к Cart Service
+    try:
+        cart_items = cart_client.get_cart(buyer_id)
+    except CartUnavailableError:
+        raise B2BUnavailableError("Cart service unavailable")
+    
     if not cart_items:
         raise CartValidationError("Корзина пуста")
 
-    # 2. Валидация items_snapshot (если передан)
+    # 4. Валидация items_snapshot (если передан клиентом)
     if payload.items_snapshot:
         snapshot_dict = {item.sku_id: item.quantity for item in payload.items_snapshot}
         for item in cart_items:
-            if snapshot_dict.get(item["sku_id"]) != item["quantity"]:
-                raise CartValidationError("Расхождение с снапшотом корзины")
+            expected_qty = snapshot_dict.get(item["sku_id"])
+            if expected_qty is None or expected_qty != item["quantity"]:
+                raise CartValidationError(
+                    f"Расхождение с снапшотом корзины для SKU {item['sku_id']}"
+                )
 
-    order_id = str(uuid.uuid4())
+    # 5. Получение актуальных цен через HTTP-вызов к B2B (ДО резервирования!)
     sku_ids = [item["sku_id"] for item in cart_items]
-
-    # 3. Получаем актуальные цены через HTTP GET к B2B
-    sku_details = _fetch_sku_details_from_b2b(sku_ids)
+    try:
+        sku_details = b2b_client.get_sku_details_batch(sku_ids)
+    except B2BUnavailableError:
+        raise
 
     items_for_reserve = []
     order_items_data = []
@@ -86,13 +71,13 @@ def process_checkout(db: Session, payload: OrderCreateRequest, idempotency_key: 
             "image_url": info.get("image_url")
         })
 
-    # 4. All-or-nothing резервирование
+    # 6. All-or-nothing резервирование через HTTP-вызов к B2B
     try:
-        b2b_client.reserve_inventory(order_id, items_for_reserve, idempotency_key)
+        reserve_result = b2b_client.reserve_inventory(order_id, items_for_reserve, idempotency_key)
     except (B2BUnavailableError, ReserveFailedError):
         raise
 
-    # 5. Создание заказа
+    # 7. Создание заказа с зафиксированными ценами
     address = _get_address(payload.address_id, buyer_id)
     payment_method = _get_payment_method(payload.payment_method_id, buyer_id)
     delivery_cost = 0

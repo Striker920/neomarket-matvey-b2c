@@ -3,5 +3,6 @@ class Settings:
     INTERNAL_SERVICE_KEY = "test-key"
     B2B_SERVICE_URL = "http://localhost:8000"
     B2C_SERVICE_URL = "http://localhost:8001"
+    CART_SERVICE_URL = "http://localhost:8002"  # <-- ДОБАВЛЕНО
 
 settings = Settings()
