@@ -8,7 +8,10 @@ from src.schemas.order import OrderCreateRequest
 from src.services.b2b_client import b2b_client, B2BUnavailableError, ReserveFailedError
 from src.services.cart_client import cart_client, CartUnavailableError
 
-class CartValidationError(Exception): pass
+
+class CartValidationError(Exception):
+    pass
+
 
 def process_checkout(db: Session, payload: OrderCreateRequest, idempotency_key: str, buyer_id: str) -> dict:
     # 1. Проверка идемпотентности
@@ -35,7 +38,7 @@ def process_checkout(db: Session, payload: OrderCreateRequest, idempotency_key: 
             expected_qty = snapshot_dict.get(item["sku_id"])
             if expected_qty is None or expected_qty != item["quantity"]:
                 raise CartValidationError(
-                    f"Расхождение с снапшотом корзины для SKU {item['sku_id']}"
+                    f"Расхождение со снапшотом корзины для SKU {item['sku_id']}"
                 )
 
     # 5. Получение актуальных цен через HTTP-вызов к B2B (ДО резервирования!)
@@ -101,11 +104,13 @@ def process_checkout(db: Session, payload: OrderCreateRequest, idempotency_key: 
     for item_data in order_items_data:
         db.add(OrderItem(id=str(uuid.uuid4()), order_id=order_id, **item_data))
 
+    # <-- ИСПРАВЛЕНО: корректный блок try/except с правильными отступами
     try:
         db.commit()
         db.refresh(order)
     except IntegrityError:
         db.rollback()
+        # При конфликте идемпотентности — возвращаем существующий заказ
         existing_order = db.query(Order).filter(Order.idempotency_key == idempotency_key).first()
         if existing_order:
             return {"status": "idempotent", "order": existing_order}
@@ -113,12 +118,14 @@ def process_checkout(db: Session, payload: OrderCreateRequest, idempotency_key: 
 
     return {"status": "created", "order": order}
 
+
 def _get_address(address_id: str, buyer_id: str) -> dict:
     return {
         "id": address_id, "country": "Россия", "city": "Москва", "street": "ул. Тестовая", 
         "building": "1", "apartment": "10", "postal_code": "101000", "recipient_name": "Иван Иванов", 
         "recipient_phone": "+79991234567", "created_at": datetime.utcnow().isoformat()
     }
+
 
 def _get_payment_method(method_id: str, buyer_id: str) -> dict:
     return {

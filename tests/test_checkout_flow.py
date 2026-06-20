@@ -28,6 +28,7 @@ def setup_db():
 
 HEADERS = {"Idempotency-Key": "checkout-001", "Authorization": "Bearer mock-token"}
 
+
 @patch("src.services.checkout_service.b2b_client.get_sku_details_batch")
 @patch("src.services.checkout_service.cart_client.get_cart")
 def test_checkout_creates_paid_order_with_fixed_prices(mock_get_cart, mock_get_sku):
@@ -53,6 +54,7 @@ def test_checkout_creates_paid_order_with_fixed_prices(mock_get_cart, mock_get_s
         assert data["items"][0]["unit_price"] == 299900
         assert data["items"][0]["name"] == "Test Product - Black, L"
 
+
 @patch("src.services.checkout_service.b2b_client.get_sku_details_batch")
 @patch("src.services.checkout_service.cart_client.get_cart")
 def test_partial_reserve_failure_returns_409(mock_get_cart, mock_get_sku):
@@ -73,7 +75,9 @@ def test_partial_reserve_failure_returns_409(mock_get_cart, mock_get_sku):
         response = client.post("/api/v1/orders", json=payload, headers=headers)
         
         assert response.status_code == 409
-        assert response.json()["detail"]["code"] == "RESERVE_FAILED"
+        # <-- ИСПРАВЛЕНО: плоский {code, message} без detail
+        assert response.json()["code"] == "RESERVE_FAILED"
+
 
 @patch("src.services.checkout_service.b2b_client.get_sku_details_batch")
 @patch("src.services.checkout_service.cart_client.get_cart")
@@ -93,10 +97,12 @@ def test_idempotency_returns_existing_order(mock_get_cart, mock_get_sku):
         assert resp1.status_code == 201
         order_id_1 = resp1.json()["id"]
         
+        # <-- ИСПРАВЛЕНО: добавлен второй запрос (ранее resp2 не был определён)
         resp2 = client.post("/api/v1/orders", json=payload, headers=headers)
         assert resp2.status_code == 201
         assert resp2.json()["id"] == order_id_1
         assert mock_reserve.call_count == 1
+
 
 @patch("src.services.checkout_service.b2b_client.get_sku_details_batch")
 @patch("src.services.checkout_service.cart_client.get_cart")
@@ -114,4 +120,23 @@ def test_b2b_unavailable_returns_503(mock_get_cart, mock_get_sku):
         response = client.post("/api/v1/orders", json=payload, headers=headers)
         
         assert response.status_code == 503
-        assert response.json()["detail"]["code"] == "SERVICE_UNAVAILABLE"
+        # <-- ИСПРАВЛЕНО: плоский {code, message} без detail
+        assert response.json()["code"] == "SERVICE_UNAVAILABLE"
+
+
+@patch("src.services.checkout_service.cart_client.get_cart")
+def test_empty_cart_returns_422_with_validation_response(mock_get_cart):
+    """Пустая корзина → 422 с CartValidationResponse согласно b2c openapi:672-676"""
+    mock_get_cart.return_value = []
+    
+    payload = {"address_id": "addr-001", "payment_method_id": "pm-001"}
+    headers = {**HEADERS, "Idempotency-Key": "checkout-005"}
+    response = client.post("/api/v1/orders", json=payload, headers=headers)
+    
+    assert response.status_code == 422
+    data = response.json()
+    # <-- CartValidationResponse: {is_valid, cart, issues}
+    assert data["is_valid"] is False
+    assert data["cart"] == []
+    assert "issues" in data
+    assert len(data["issues"]) >= 1

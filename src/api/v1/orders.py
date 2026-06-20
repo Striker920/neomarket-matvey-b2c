@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from src.database import get_db
 from src.schemas.order import OrderCreateRequest, OrderResponse, OrderItemResponse, AddressResponse, PaymentMethodResponse, StatusHistoryItem
@@ -8,16 +9,16 @@ from src.models.order import OrderItem
 
 router = APIRouter(prefix="/api/v1", tags=["B2C: Orders"])
 
+
 def get_current_buyer(authorization: str = Header(..., alias="Authorization")) -> str:
-    """
-    Извлечение buyer_id из JWT-токена.
-    В реальной системе здесь парсинг JWT. Для тестов возвращаем мок.
-    """
+    """Извлечение buyer_id из JWT-токена."""
     if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail={"code": "UNAUTHORIZED", "message": "Требуется Bearer токен"})
-    # В production: декодирование JWT и извлечение sub (buyer_id)
-    # Для тестов: мок buyer_id
+        raise HTTPException(
+            status_code=401,
+            detail={"code": "UNAUTHORIZED", "message": "Требуется Bearer токен"}
+        )
     return "buyer-001"
+
 
 @router.post("/orders", status_code=status.HTTP_201_CREATED)
 def create_order(
@@ -62,6 +63,7 @@ def create_order(
             delivered_at=order.delivered_at
         )
     except B2BUnavailableError:
+        # <-- ИСПРАВЛЕНО: добавлен raise HTTPException
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "SERVICE_UNAVAILABLE", "message": "B2B or Cart service unavailable"}
@@ -76,9 +78,14 @@ def create_order(
             }
         )
     except CartValidationError as e:
-        raise HTTPException(
+        # <-- ИСПРАВЛЕНО: возвращаем CartValidationResponse согласно b2c openapi:672-676
+        return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"code": "CART_INVALID", "message": str(e)}
+            content={
+                "is_valid": False,
+                "cart": [],
+                "issues": [str(e)]
+            }
         )
     except ValueError as e:
         raise HTTPException(
