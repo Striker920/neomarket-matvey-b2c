@@ -32,3 +32,17 @@ class FacetItem(BaseModel):
 class FacetsResponse(BaseModel):
     category_id: Optional[str] = None
     facets: List[FacetItem] = []
+
+
+class CatalogProductCard(BaseModel):
+    """
+    Схема карточки товара для каталога (по b2c/openapi.yaml).
+    Используется в GET /api/v1/catalog/products/{id}/similar.
+    """
+    id: str
+    name: str = Field(..., description="Название товара")
+    min_price: float = Field(..., description="Минимальная цена среди SKU")
+    has_stock: bool = Field(..., description="Есть ли в наличии")
+    images: List[str] = Field(default_factory=list, description="Список URL изображений")
+    
+    model_config = {"from_attributes": True}

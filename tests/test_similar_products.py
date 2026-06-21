@@ -74,9 +74,22 @@ class TestSimilarProducts:
 
         assert response.status_code == 200
         data = response.json()
-        assert len(data["items"]) <= 8
-        ids = [item["id"] for item in data["items"]]
+        
+        # ✅ Проверяем plain array (не wrapper)
+        assert isinstance(data, list)
+        assert len(data) <= 8
+        
+        ids = [item["id"] for item in data]
         assert "product-1" not in ids
+        
+        # ✅ Проверяем поля CatalogProductCard
+        for item in data:
+            assert "id" in item
+            assert "name" in item          # ✅ было: title
+            assert "min_price" in item     # ✅ было: price
+            assert "has_stock" in item     # ✅ было: in_stock
+            assert "images" in item        # ✅ было: image
+            assert isinstance(item["images"], list)
 
     @patch('src.services.similar_products_service.b2b_client.get_products')
     def test_empty_category_returns_200_empty_list(self, mock_get_products, client):
@@ -94,7 +107,10 @@ class TestSimilarProducts:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["items"] == []
+        
+        # ✅ Проверяем plain array
+        assert isinstance(data, list)
+        assert data == []
 
     @patch('src.services.similar_products_service.b2b_client.get_products')
     @patch('src.services.similar_products_service.b2b_client.get_product_by_id')
@@ -125,4 +141,7 @@ class TestSimilarProducts:
 
         assert response.status_code == 200
         data = response.json()
-        assert len(data["items"]) <= 1
+        
+        # ✅ Проверяем plain array
+        assert isinstance(data, list)
+        assert len(data) <= 1

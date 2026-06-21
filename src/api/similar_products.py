@@ -1,15 +1,16 @@
 from fastapi import APIRouter, HTTPException, Query
-from src.schemas.catalog import ProductShortListResponse
+from typing import List
+from src.schemas.catalog import CatalogProductCard
 from src.services.similar_products_service import similar_products_service
 
 router = APIRouter(prefix="/api/v1/catalog", tags=["Similar Products"])
 
 
-@router.get("/products/{product_id}/similar", response_model=ProductShortListResponse)
+@router.get("/products/{product_id}/similar", response_model=List[CatalogProductCard])
 def get_similar_products(
     product_id: str,
     category: str = Query(None, description="Category ID"),
-    limit: int = Query(8, ge=1, le=20),
+    limit: int = Query(8, ge=1, le=50),  # ✅ изменено: le=20 → le=50
     offset: int = Query(0, ge=0),
 ):
     try:
@@ -26,7 +27,7 @@ def get_similar_products(
                 detail={"code": "NOT_FOUND", "message": "Product not found"}
             )
 
-        return result
+        return result  # ✅ возвращаем plain array
     except HTTPException:
         raise
     except Exception:
