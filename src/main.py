@@ -3,6 +3,9 @@ from src.database import Base, engine
 from src.exceptions import register_exception_handlers
 from src.api import catalog, product_card, similar_products, categories, favorites, subscriptions, cart, banners, collections, orders, order_cancel, events
 
+# ✅ ВАЖНО: импорты моделей ПЕРЕД create_all
+from src.models import category, product
+
 app = FastAPI(title="NeoMarket B2C Service")
 
 Base.metadata.create_all(bind=engine)

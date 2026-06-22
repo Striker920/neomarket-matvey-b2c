@@ -15,9 +15,11 @@ from fastapi.testclient import TestClient
 from src.database import Base, get_db
 from src.main import app
 from src.config import settings
+from src.models.category import Category
+from src.models.product import Product
 
 
-TEST_DATABASE_URL = "sqlite:///./test_b2c.db"
+TEST_DATABASE_URL = "sqlite:///./test.db"
 
 
 @pytest.fixture(scope="session")
@@ -36,6 +38,10 @@ def db_session(engine):
     try:
         yield db
     finally:
+        # ✅ Очистка таблиц между тестами — изоляция
+        db.query(Category).delete()
+        db.query(Product).delete()
+        db.commit()
         db.rollback()
         db.close()
 

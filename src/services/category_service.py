@@ -1,95 +1,164 @@
-from src.services.b2b_client import b2b_client
-import httpx
+from sqlalchemy.orm import Session
+from src.models.category import Category
+from src.models.product import Product
+from src.schemas.categories import CategoryNode, CategoryDetails, BreadcrumbItem
+from typing import List, Optional
+
+
+class OrphanNodeError(Exception):
+    """Выбрасывается при обнаружении сломанной иерархии (orphan node)."""
+    def __init__(self, category_id: str, missing_parent_id: str):
+        self.category_id = category_id
+        self.missing_parent_id = missing_parent_id
+        super().__init__(
+            f"Orphan node detected: category {category_id} references missing parent {missing_parent_id}"
+        )
 
 
 class CategoryService:
-    def get_category_tree(self) -> dict:
-        try:
-            with httpx.Client() as client:
-                response = client.get(
-                    f"{b2b_client.base_url}/api/v1/categories/",
-                    headers=b2b_client.headers,
-                    timeout=10.0
-                )
-                response.raise_for_status()
-                return response.json()
-        except Exception:
-            return {"items": []}
+    def __init__(self, db: Session):
+        self.db = db
 
-    def get_category_detail(self, category_id: str, include_product_count: bool = False) -> dict | None:
-        try:
-            with httpx.Client() as client:
-                response = client.get(
-                    f"{b2b_client.base_url}/api/v1/categories/{category_id}",
-                    headers=b2b_client.headers,
-                    timeout=10.0
-                )
-                response.raise_for_status()
-                result = response.json()
-
-                if include_product_count:
-                    b2b_data = b2b_client.get_products(limit=100, offset=0, category=category_id)
-                    result["product_count"] = len(b2b_data.get("items", []))
-
-                return result
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 404:
-                return None
-            raise
-        except Exception:
-            return None
-
-    def get_breadcrumbs(self, category_id: str = None, product_id: str = None) -> dict | None:
-        if category_id and product_id:
-            return {"error": "ambiguous_param"}
-
-        if not category_id and not product_id:
-            return {"error": "missing_param"}
-
-        resolved_via = "category_id"
-
-        if product_id:
-            resolved_via = "product_id"
-            try:
-                product = b2b_client.get_product_by_id(product_id)
-            except httpx.HTTPStatusError:
-                return None
-            if not product:
-                return None
-            category_id = product.get("category", {}).get("id")
-            if not category_id:
-                return {"data": [], "meta": {"resolved_via": "product_id", "product_id": product_id}}
-
-        try:
-            with httpx.Client() as client:
-                response = client.get(
-                    f"{b2b_client.base_url}/api/v1/categories/{category_id}",
-                    headers=b2b_client.headers,
-                    timeout=10.0
-                )
-                if response.status_code == 404:
-                    cat_name = "Unknown"
-                else:
-                    cat_data = response.json()
-                    cat_name = cat_data.get("name", "Unknown")
-        except Exception:
-            cat_name = "Unknown"
-
-        items = [
-            {
-                "id": category_id,
-                "slug": None,
-                "name": cat_name,
-                "url": f"/catalog/{category_id}",
-                "level": 0,
-                "is_current": True
-            }
-        ]
-
-        return {
-            "data": items,
-            "meta": {"resolved_via": resolved_via, "category_id": category_id}
+    def get_category_tree(self) -> List[CategoryNode]:
+        """
+        Построить дерево категорий из плоского списка.
+        
+        Если обнаружен orphan node → OrphanNodeError (422)
+        """
+        all_categories = self.db.query(Category).all()
+        
+        if not all_categories:
+            return []
+        
+        # Создаём словарь для быстрого поиска
+        categories_by_id = {c.id: c for c in all_categories}
+        
+        # Проверяем orphan nodes
+        for cat in all_categories:
+            if cat.parent_id and cat.parent_id not in categories_by_id:
+                raise OrphanNodeError(cat.id, cat.parent_id)
+        
+        # Строим дерево
+        nodes_by_id = {
+            c.id: CategoryNode(
+                id=c.id,
+                name=c.name,
+                slug=c.slug,
+                parent_id=c.parent_id,
+                children=[]
+            )
+            for c in all_categories
         }
+        
+        roots = []
+        for cat in all_categories:
+            node = nodes_by_id[cat.id]
+            if cat.parent_id is None:
+                roots.append(node)
+            else:
+                parent_node = nodes_by_id[cat.parent_id]
+                parent_node.children.append(node)
+        
+        # Сортируем по имени для стабильности
+        self._sort_tree(roots)
+        return roots
 
+    def _sort_tree(self, nodes: List[CategoryNode]):
+        """Рекурсивная сортировка дерева по имени."""
+        nodes.sort(key=lambda n: n.name)
+        for node in nodes:
+            if node.children:
+                self._sort_tree(node.children)
 
-category_service = CategoryService()
+    def get_category_details(self, category_id: str) -> Optional[CategoryDetails]:
+        """Получить детали категории по ID."""
+        cat = self.db.query(Category).filter(Category.id == category_id).first()
+        if not cat:
+            return None
+        return CategoryDetails(
+            id=cat.id,
+            name=cat.name,
+            slug=cat.slug,
+            parent_id=cat.parent_id,
+        )
+
+    def get_breadcrumbs_by_category(self, category_id: str) -> Optional[List[BreadcrumbItem]]:
+        """
+        Получить хлебные крошки от корня до категории.
+        
+        Возвращает None если категория не найдена (→ 404).
+        Выбрасывает OrphanNodeError при сломанной иерархии (→ 422).
+        """
+        cat = self.db.query(Category).filter(Category.id == category_id).first()
+        if not cat:
+            return None
+        
+        # Проверяем целостность иерархии
+        self._check_hierarchy_integrity(cat)
+        
+        # Идём вверх по parent_id до корня
+        path = []
+        current = cat
+        visited = set()
+        
+        while current is not None:
+            if current.id in visited:
+                raise OrphanNodeError(current.id, "cycle_detected")
+            visited.add(current.id)
+            
+            path.append(BreadcrumbItem(
+                id=current.id,
+                name=current.name,
+                slug=current.slug,
+            ))
+            
+            if current.parent_id is None:
+                break
+            
+            current = self.db.query(Category).filter(
+                Category.id == current.parent_id
+            ).first()
+            
+            if current is None:
+                raise OrphanNodeError(visited.pop(), "missing_parent")
+        
+        # Разворачиваем: от корня к текущей категории
+        path.reverse()
+        return path
+
+    def get_breadcrumbs_by_product(self, product_id: str) -> Optional[List[BreadcrumbItem]]:
+        """
+        Получить хлебные крошки для товара.
+        
+        Возвращает None если товар не найден (→ 404).
+        """
+        product = self.db.query(Product).filter(Product.id == product_id).first()
+        if not product:
+            return None
+        
+        if not product.category_id:
+            return []
+        
+        return self.get_breadcrumbs_by_category(product.category_id)
+
+    def _check_hierarchy_integrity(self, category: Category):
+        """Проверить целостность иерархии от категории до корня."""
+        current = category
+        visited = set()
+        
+        while current is not None:
+            if current.id in visited:
+                raise OrphanNodeError(current.id, "cycle_detected")
+            visited.add(current.id)
+            
+            if current.parent_id is None:
+                break
+            
+            parent = self.db.query(Category).filter(
+                Category.id == current.parent_id
+            ).first()
+            
+            if parent is None:
+                raise OrphanNodeError(current.id, current.parent_id)
+            
+            current = parent
